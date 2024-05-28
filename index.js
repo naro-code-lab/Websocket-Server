@@ -32,17 +32,22 @@ wss.on("connection", (ws) => {
 app.use(bodyParser.json());
 
 app.post("/", (req, res) => {
-	const { channel, event, data } = req.body;
+	const { channel, data, event } = req.body;
 
 	let subscriptionConnection = subscriptions[channel?.name];
 
 	if (subscriptionConnection) {
 		if (subscriptionConnection.readyState === WebSocket.OPEN) {
+			let socket = data["socket"];
+
+			delete data["socket"];
+
 			subscriptionConnection.send(
 				JSON.stringify({
-					event: data.event,
+					event: event,
 					channel: channel,
-					data: data,
+					data,
+					socket,
 				})
 			);
 		}

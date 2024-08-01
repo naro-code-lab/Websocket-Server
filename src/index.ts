@@ -64,7 +64,7 @@ router.use((req, res, next) => {
 		process.env.BLACKLISTED_BROADCASTING_SERVER_IPS?.split(",");
 
 	if (blacklisedIps?.includes(clientIp as string)) {
-		return res.status(401).send("Connection is blacklisted!");
+		return res.status(401).jsonp({ message: "Connection is blacklisted!" });
 	}
 
 	let allowedIps = process.env.ALLOWED_BROADCASTING_SERVER_IPS?.split(",");
@@ -76,7 +76,7 @@ router.use((req, res, next) => {
 		return next();
 	}
 
-	return res.status(401).send("Connection not whitelisted!");
+	return res.status(401).jsonp({ message: "Connection not whitelisted!" });
 });
 
 router.post("/", (req, res) => {

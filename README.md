@@ -36,7 +36,7 @@ yarn global add typescript ts-node nodemon
     Clone the repository to your local machine:
 
     ```bash
-    git clone https://github.com/your-username/simple-websocket-server.git
+    git clone https://github.com/naro-code-lab/Websocket-Server.git
     ```
 
 2. **Install dependencies**:
@@ -44,7 +44,7 @@ yarn global add typescript ts-node nodemon
     Navigate into the project directory and install the dependencies using npm or yarn:
 
     ```bash
-    cd simple-websocket-server
+    cd websocket-server
     npm install
     ```
 
@@ -74,6 +74,8 @@ yarn global add typescript ts-node nodemon
     HOST=localhost
     PORT=3000
     WS_PORT=6001
+    ALLOWED_BROADCASTING_SERVER_IPS="*"
+    BLACKLISTED_BROADCASTING_SERVER_IPS=""
     ```
 
 4. **IP Whitelisting**:
@@ -81,7 +83,7 @@ yarn global add typescript ts-node nodemon
     In the `.env` file, specify the IP addresses that are allowed to connect to the server. Separate multiple IPs with commas. For localhost, you can use:
 
     ```dotenv
-    WHITELIST_IPS=127.0.0.1,::ffff:127.0.0.1,::1
+    ALLOWED_BROADCASTING_SERVER_IPS=127.0.0.1,::ffff:127.0.0.1,::1,localhost
     ```
 
 5. **IP Blacklisting**:
@@ -89,7 +91,7 @@ yarn global add typescript ts-node nodemon
     Optionally, you can also blacklist IP addresses that are not allowed to connect:
 
     ```dotenv
-    BLACKLIST_IPS=192.168.0.1
+    BLACKLISTED_BROADCASTING_SERVER_IPS=192.168.0.1
     ```
 
 ## Running the Server
@@ -106,11 +108,11 @@ Or with yarn:
 yarn serve
 ```
 
-The server should now be running and ready to handle WebSocket connections.
+Once the server is running, it will automatically listen for incoming WebSocket connections and broadcast events from Laravel. Ensure that your Laravel application is configured to use the WebSocket server for broadcasting.
 
 ## Contributing
 
-Contributions are welcome! Please fork the repository and submit a pull request.
+Contributions are welcome! Please submit issues and pull requests for any improvements or bug fixes.
 
 ## License
 

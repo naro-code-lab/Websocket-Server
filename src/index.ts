@@ -88,8 +88,6 @@ router.post("/", (req, res) => {
 
 			delete data["socket"];
 
-			console.log({ channel, data, event });
-
 			ws.send(
 				JSON.stringify({
 					event: event,

@@ -64,7 +64,7 @@ wss.on("connection", (ws: WebSocket, req) => {
 				subscriptions[appKey][channel].push(ws);
 			}
 
-			console.log(`Subscribed: AppKey=${appKey}, Channel=${channel}`);
+			// console.log(`Subscribed: AppKey=${appKey}, Channel=${channel}`);
 		} catch (error) {
 			console.error("Invalid WebSocket message:", message.toString());
 		}

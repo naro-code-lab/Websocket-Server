@@ -1,9 +1,10 @@
 import express from "express";
 import requestIp from "request-ip";
 import bodyParser from "body-parser";
-import { WebSocket, WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer, RawData } from "ws";
 import { SubscriptionInterface } from "./types";
 import "dotenv/config";
+import Joi from "joi";
 
 // Ensure required environment variables are set
 const {
@@ -20,42 +21,63 @@ if (!HOST || !PORT || !WSPORT || !ALLOWED_BROADCASTING_SERVER_IPS) {
 
 const app = express();
 const router = express.Router();
-const wss = new WebSocketServer({ port: parseInt(WSPORT, 10) });
+const wss = new WebSocketServer({ port: parseInt(WSPORT) });
 
 let subscriptions: SubscriptionInterface = {};
 
 // Handle WebSocket connections
 wss.on("connection", (ws: WebSocket, req) => {
 	let channel = "";
+	let appKey = "";
 
-	ws.on("message", (message: string) => {
+	ws.on("message", (message: RawData) => {
 		try {
-			const data = JSON.parse(message);
+			// Convert message from Buffer if necessary
+			const parsedMessage = JSON.parse(
+				Buffer.isBuffer(message)
+					? message.toString()
+					: message instanceof ArrayBuffer
+					? Buffer.from(message).toString()
+					: message.toString()
+			);
 
-			if (!data.channel) {
-				return;
+			// Ensure required fields exist
+			if (!parsedMessage.channel) {
+				return console.error("Channel is required!");
 			}
 
-			channel = data.channel;
+			if (!parsedMessage.appKey) {
+				return console.error("App key is required!");
+			}
 
-			if (!subscriptions[channel]) {
-				subscriptions[channel] = [ws];
+			const { appKey, channel } = parsedMessage;
+
+			// Initialize appKey if not set
+			if (!subscriptions[appKey]) {
+				subscriptions[appKey] = {};
+			}
+
+			// Initialize channel if not set
+			if (!subscriptions[appKey][channel]) {
+				subscriptions[appKey][channel] = [ws];
 			} else {
-				subscriptions[channel].push(ws);
+				subscriptions[appKey][channel].push(ws);
 			}
+
+			console.log(`Subscribed: AppKey=${appKey}, Channel=${channel}`);
 		} catch (error) {
-			console.error("Invalid WebSocket message:", message);
+			console.error("Invalid WebSocket message:", message.toString());
 		}
 	});
 
 	ws.on("close", () => {
-		if (channel && subscriptions[channel]) {
-			subscriptions[channel] = subscriptions[channel].filter(
-				(client) => client !== ws
-			);
+		if (channel && appKey) {
+			subscriptions[appKey][channel] = subscriptions[appKey][
+				channel
+			].filter((client) => client !== ws);
 
-			if (!subscriptions[channel].length) {
-				delete subscriptions[channel];
+			if (!subscriptions[appKey][channel].length) {
+				delete subscriptions[appKey][channel];
 			}
 		}
 	});
@@ -84,10 +106,43 @@ router.use((req, res, next) => {
 
 // Handle broadcasting messages
 router.post("/", (req, res) => {
-	const { channel, data, event } = req.body;
+	const {
+		channel,
+		appKey,
+		data,
+		event,
+	}: {
+		channel: string | string[];
+		appKey: string;
+		data: any;
+		event: string;
+	} = req.body;
+
+	const schema = Joi.object({
+		channel: Joi.alternatives(
+			Joi.string(),
+			Joi.array().items(Joi.string())
+		).required(),
+		appKey: Joi.string().required(),
+		data: Joi.any().required(),
+		event: Joi.string().required(),
+	});
+
+	const { error } = schema.validate({ channel, appKey, data, event });
+
+	if (error) {
+		return res
+			.status(400)
+			.json(`Validation error: ${error.details[0].message}`);
+	}
 
 	const sendMessages = (channel: string, data: any, event: string) => {
-		subscriptions[channel]?.forEach((ws) => {
+		if (!subscriptions[appKey]) {
+			console.error(`App key "${appKey}" not found!`);
+			return;
+		}
+
+		subscriptions[appKey][channel]?.forEach((ws) => {
 			if (ws.readyState === WebSocket.OPEN) {
 				const { socket, ...filteredData } = data;
 

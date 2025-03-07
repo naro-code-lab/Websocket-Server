@@ -1,5 +1,7 @@
 import { WebSocket } from "ws";
 
 export interface SubscriptionInterface {
-	[key: string]: WebSocket[];
+	[key: string]: {
+		[key: string]: WebSocket[];
+	};
 }

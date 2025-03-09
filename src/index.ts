@@ -29,11 +29,16 @@ let subscriptions: SubscriptionInterface = {};
 wss.on("connection", (ws: WebSocket, req) => {
 	let channel = "";
 	let appKey = "";
+	let event = "";
 
 	ws.on("message", (message: RawData) => {
 		try {
 			// Convert message from Buffer if necessary
-			const parsedMessage = JSON.parse(
+			const parsedMessage: {
+				appKey: string;
+				channel: string;
+				event: string;
+			} = JSON.parse(
 				Buffer.isBuffer(message)
 					? message.toString()
 					: message instanceof ArrayBuffer
@@ -50,34 +55,63 @@ wss.on("connection", (ws: WebSocket, req) => {
 				return console.error("App key is required!");
 			}
 
-			const { appKey, channel } = parsedMessage;
-
-			// Initialize appKey if not set
-			if (!subscriptions[appKey]) {
-				subscriptions[appKey] = {};
+			if (!parsedMessage.event) {
+				return console.error("Event is required!");
 			}
 
-			// Initialize channel if not set
-			if (!subscriptions[appKey][channel]) {
-				subscriptions[appKey][channel] = [ws];
-			} else {
-				subscriptions[appKey][channel].push(ws);
-			}
+			({ appKey, channel, event } = parsedMessage);
 
-			// console.log(`Subscribed: AppKey=${appKey}, Channel=${channel}`);
+			subscriptions = {
+				...subscriptions,
+				[appKey]: {
+					...subscriptions[appKey],
+					[event]: {
+						...subscriptions[appKey]?.[event],
+						[channel]: [
+							...(subscriptions[appKey]?.[event]?.[channel] ||
+								[]),
+							ws,
+						],
+					},
+				},
+			};
+
+			// console.log(`Subscribed: AppKey=${appKey}, Event=${event}, Channel=${channel}`);
 		} catch (error) {
 			console.error("Invalid WebSocket message:", message.toString());
 		}
 	});
 
 	ws.on("close", () => {
-		if (channel && appKey) {
-			subscriptions[appKey][channel] = subscriptions[appKey][
-				channel
-			].filter((client) => client !== ws);
+		console.log({ subscriptions_connection: subscriptions });
 
-			if (!subscriptions[appKey][channel].length) {
-				delete subscriptions[appKey][channel];
+		if (appKey && event && channel) {
+			if (subscriptions[appKey]?.[event]?.[channel]) {
+				// Remove the disconnected client
+				subscriptions[appKey][event][channel] = subscriptions[appKey][
+					event
+				][channel].filter((client) => client !== ws);
+
+				// Remove the channel if it's empty
+				if (subscriptions[appKey][event][channel].length === 0) {
+					delete subscriptions[appKey][event][channel];
+				}
+			}
+
+			// Remove the event if no channels exist
+			if (
+				subscriptions[appKey]?.[event] &&
+				Object.keys(subscriptions[appKey][event]).length === 0
+			) {
+				delete subscriptions[appKey][event];
+			}
+
+			// Remove the appKey if no events exist
+			if (
+				subscriptions[appKey] &&
+				Object.keys(subscriptions[appKey]).length === 0
+			) {
+				delete subscriptions[appKey];
 			}
 		}
 	});
@@ -137,12 +171,21 @@ router.post("/", (req, res) => {
 	}
 
 	const sendMessages = (channel: string, data: any, event: string) => {
-		if (!subscriptions[appKey]) {
-			console.error(`App key "${appKey}" not found!`);
+		if (!appKey || !event || !channel) {
+			console.error(
+				"Invalid parameters: appKey, event, or channel is missing!"
+			);
 			return;
 		}
 
-		subscriptions[appKey][channel]?.forEach((ws) => {
+		if (!subscriptions[appKey]?.[event]?.[channel]) {
+			console.error(
+				`No subscriptions found for appKey: "${appKey}", event: "${event}", channel: "${channel}"`
+			);
+			return;
+		}
+
+		subscriptions[appKey][event][channel]?.forEach((ws) => {
 			if (ws.readyState === WebSocket.OPEN) {
 				const { socket, ...filteredData } = data;
 

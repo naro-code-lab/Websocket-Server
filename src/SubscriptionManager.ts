@@ -72,7 +72,11 @@ export class SubscriptionManager {
 		event: string,
 		channel: string
 	): Subscription[] {
-		return this.subscriptions[appKey]?.[event]?.[channel] || [];
+		let sub = this.subscriptions[appKey]?.[event]?.[channel] || [];
+
+		console.log(sub);
+
+		return sub;
 	}
 
 	public updateActivity(

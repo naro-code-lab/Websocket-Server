@@ -2,20 +2,17 @@ import express from "express";
 import requestIp from "request-ip";
 import bodyParser from "body-parser";
 import { WebSocket, WebSocketServer, RawData } from "ws";
+import { SubscriptionInterface } from "./types";
 import "dotenv/config";
 import Joi from "joi";
-import { SubscriptionManager } from "./SubscriptionManager";
 
-// Ensure required environment variables are set
 const {
 	HOST,
 	PORT,
 	WSPORT,
 	ALLOWED_BROADCASTING_SERVER_IPS,
 	PROTOCOL = "http",
-	CLEANUP_INTERVAL_MS = "60000",
-	MAX_INACTIVE_TIME_MS = "3600000",
-	MAX_PAYLOAD_SIZE_MB = "10",
+	BLACKLISTED_BROADCASTING_SERVER_IPS = "",
 } = process.env;
 
 if (!HOST || !PORT || !WSPORT || !ALLOWED_BROADCASTING_SERVER_IPS) {
@@ -24,215 +21,173 @@ if (!HOST || !PORT || !WSPORT || !ALLOWED_BROADCASTING_SERVER_IPS) {
 
 const app = express();
 const router = express.Router();
-const wss = new WebSocketServer({
-	port: parseInt(WSPORT),
-	maxPayload: parseInt(MAX_PAYLOAD_SIZE_MB) * 1024 * 1024, // Convert MB to bytes
-	perMessageDeflate: {
-		zlibDeflateOptions: {
-			level: 6, // Balanced compression
-		},
-	},
-});
+const wss = new WebSocketServer({ port: Number(WSPORT) });
 
-// Initialize subscription manager
-const subscriptionManager = new SubscriptionManager(
-	parseInt(CLEANUP_INTERVAL_MS),
-	parseInt(MAX_INACTIVE_TIME_MS)
-);
+let subscriptions: SubscriptionInterface = {};
 
-// Message validation schema
-const messageSchema = Joi.object({
-	appKey: Joi.string().required(),
-	channel: Joi.string().required(),
-	event: Joi.string()
-		.pattern(/^[a-zA-Z0-9\\._]+$/) // Allow letters, numbers, backslashes, and dots
-		.required()
-		.messages({
-			"string.pattern.base":
-				"Event name can only contain letters, numbers, backslashes, and dots",
-		}),
-}).unknown(true);
+// Helper: safely add a ws client subscription
+const addSubscription = (
+	appKey: string,
+	event: string,
+	channel: string,
+	ws: WebSocket
+) => {
+	if (!subscriptions[appKey]) subscriptions[appKey] = {};
+	if (!subscriptions[appKey][event]) subscriptions[appKey][event] = {};
+	if (!subscriptions[appKey][event][channel])
+		subscriptions[appKey][event][channel] = [];
 
-// Handle WebSocket connections
+	if (!subscriptions[appKey][event][channel].includes(ws)) {
+		subscriptions[appKey][event][channel].push(ws);
+	}
+};
+
+// Helper: safely remove a ws client subscription
+const removeSubscription = (
+	appKey: string,
+	event: string,
+	channel: string,
+	ws: WebSocket
+) => {
+	const channelSubs = subscriptions[appKey]?.[event]?.[channel];
+	if (!channelSubs) return;
+
+	subscriptions[appKey][event][channel] = channelSubs.filter(
+		(client) => client !== ws
+	);
+
+	// Clean up empty structures
+	if (subscriptions[appKey][event][channel].length === 0)
+		delete subscriptions[appKey][event][channel];
+	if (Object.keys(subscriptions[appKey][event]).length === 0)
+		delete subscriptions[appKey][event];
+	if (Object.keys(subscriptions[appKey]).length === 0)
+		delete subscriptions[appKey];
+};
+
 wss.on("connection", (ws: WebSocket, req) => {
-	let connectionInfo = {
-		appKey: "",
-		channel: "",
-		event: "",
-	};
+	let appKey = "";
+	let event = "";
+	let channel = "";
 
 	ws.on("message", (message: RawData) => {
 		try {
-			// Convert message from Buffer if necessary
-			const messageStr = Buffer.isBuffer(message)
-				? message.toString()
-				: message instanceof ArrayBuffer
-				? Buffer.from(message).toString()
-				: message.toString();
+			const parsedMessage = JSON.parse(message.toString());
+			let { appKey: aKey, channel: ch, event: ev } = parsedMessage;
 
-			const parsedMessage = JSON.parse(messageStr);
-
-			// Validate message format
-			const { error, value } = messageSchema.validate(parsedMessage);
-
-			// Normalize event name by replacing backslashes with dots
-			// This converts "App\Events\UserUpdatedEvent" to "App.Events.UserUpdatedEvent"
-			value.event = value.event.replace(/\\/g, ".");
-
-			if (error) {
-				ws.send(JSON.stringify({ error: error.details[0].message }));
-				return;
+			if (!aKey || !ch || !ev) {
+				return console.error(
+					"Missing required fields (appKey, channel, event)."
+				);
 			}
 
-			console.log({ value });
+			ev = ev.replace(/(\\\\|\\|\/\/|\/)/g, ".");
 
-			const { appKey, channel, event } = value;
+			appKey = aKey;
+			event = ev;
+			channel = ch;
 
-			connectionInfo = { appKey, channel, event };
-
-			// Add subscription and update activity
-			subscriptionManager.addSubscription(appKey, event, channel, ws);
-
-			subscriptionManager.updateActivity(appKey, event, channel, ws);
-		} catch (error) {
-			console.error("Invalid WebSocket message:", error);
-			ws.send(JSON.stringify({ error: "Invalid message format" }));
+			addSubscription(appKey, event, channel, ws);
+		} catch {
+			console.error("Invalid WebSocket message:", message.toString());
 		}
 	});
 
 	ws.on("close", () => {
-		const { appKey, event, channel } = connectionInfo;
 		if (appKey && event && channel) {
-			subscriptionManager.removeSubscription(appKey, event, channel, ws);
+			removeSubscription(appKey, event, channel, ws);
 		}
-	});
-
-	ws.on("error", (error) => {
-		console.error("WebSocket error:", error);
 	});
 });
 
-// Middleware to handle IP filtering
+// Middleware: IP filtering
 router.use((req, res, next) => {
-	const clientIp = requestIp.getClientIp(req);
+	const clientIp = requestIp.getClientIp(req) || "";
 
-	const blacklistedIps =
-		process.env.BLACKLISTED_BROADCASTING_SERVER_IPS?.split(",") || [];
-	if (blacklistedIps.includes(clientIp || "")) {
-		return res.status(401).json({ error: "Connection is blacklisted!" });
+	const blacklistedIps = BLACKLISTED_BROADCASTING_SERVER_IPS.split(",").map(
+		(ip) => ip.trim()
+	);
+	if (blacklistedIps.includes(clientIp)) {
+		return res.status(401).send("Connection is blacklisted!");
 	}
 
-	const allowedIps = ALLOWED_BROADCASTING_SERVER_IPS.split(",");
+	const allowedIps = ALLOWED_BROADCASTING_SERVER_IPS.split(",").map((ip) =>
+		ip.trim()
+	);
 	if (
 		ALLOWED_BROADCASTING_SERVER_IPS === "*" ||
-		allowedIps.includes(clientIp || "")
+		allowedIps.includes("*") ||
+		allowedIps.includes(clientIp)
 	) {
 		return next();
 	}
 
-	return res.status(401).json({ error: "Connection not whitelisted!" });
+	return res.status(401).send("Connection not whitelisted!");
 });
 
-// Request validation schema
-const broadcastSchema = Joi.object({
-	channel: Joi.alternatives(
-		Joi.string(),
-		Joi.array().items(Joi.string())
-	).required(),
-	appKey: Joi.string().required(),
-	data: Joi.any().required(),
-	event: Joi.string().required(),
-});
+router.post("/", bodyParser.json(), (req, res) => {
+	const schema = Joi.object({
+		channel: Joi.alternatives(
+			Joi.string(),
+			Joi.array().items(Joi.string())
+		).required(),
+		appKey: Joi.string().required(),
+		data: Joi.any().required(),
+		event: Joi.string().required(),
+	});
 
-// Handle broadcasting messages
-router.post("/", (req, res) => {
-	const { error, value } = broadcastSchema.validate(req.body);
+	const { error, value } = schema.validate(req.body);
+	if (error)
+		return res
+			.status(400)
+			.json(`Validation error: ${error.details[0].message}`);
 
-	if (error) {
-		return res.status(400).json({ error: error.details[0].message });
-	}
+	value["event"] = value["event"].replace(/(\\\\|\\|\/\/|\/)/g, ".");
 
-	const { channel, appKey, data, event } = value;
+	let { appKey, event, data, channel } = value;
 
-	const sendMessages = (channel: string, data: any, event: string) => {
-		if (!appKey || !event || !channel) {
-			console.error(
-				"Invalid parameters: appKey, event, or channel is missing!"
+	const sendMessage = (ch: string) => {
+		const clients = subscriptions[appKey]?.[event]?.[ch];
+		if (!clients?.length) {
+			return console.error(
+				`No subscriptions for appKey="${appKey}", event="${event}", channel="${ch}"`
 			);
-			return;
 		}
 
-		const subscribers = subscriptionManager.getSubscriptions(
-			appKey,
-			event,
-			channel
-		);
-
-		if (!subscribers.length) {
-			console.error(
-				`No subscriptions found for appKey: "${appKey}", event: "${event}", channel: "${channel}"`
-			);
-			return;
-		}
-
-		const { socket, ...filteredData } = data;
-		const messageStr = JSON.stringify({
-			event,
-			channel,
-			data: filteredData,
-			socket,
-		});
-
-		subscribers.forEach(({ ws }) => {
+		clients.forEach((ws) => {
 			if (ws.readyState === WebSocket.OPEN) {
-				ws.send(messageStr);
+				// Clone data and remove socket field if present
+				const { socket, ...filteredData } = data;
+				ws.send(
+					JSON.stringify({
+						event,
+						channel: ch,
+						data: filteredData,
+						socket,
+					})
+				);
 			}
 		});
 	};
 
 	if (Array.isArray(channel)) {
-		channel.forEach((ch) => sendMessages(ch, data, event));
+		channel.forEach(sendMessage);
 	} else {
-		sendMessages(channel, data, event);
+		sendMessage(channel);
 	}
 
-	return res.sendStatus(200);
+	res.sendStatus(200);
 });
 
-// Use JSON parser with size limits
-app.use(bodyParser.json({ limit: `${MAX_PAYLOAD_SIZE_MB}mb` }));
 app.use(requestIp.mw());
 app.use("/", router);
 
-// Graceful shutdown handling
-const gracefulShutdown = () => {
-	console.log("Shutting down gracefully...");
-
-	// Close all WebSocket connections
-	wss.clients.forEach((client) => {
-		client.close(1000, "Server shutting down");
-	});
-
-	// Cleanup subscription manager
-	subscriptionManager.destroy();
-
-	// Close WebSocket server
-	wss.close(() => {
-		console.log("WebSocket server closed");
-		process.exit(0);
-	});
-};
-
-process.on("SIGTERM", gracefulShutdown);
-process.on("SIGINT", gracefulShutdown);
-
-// Start servers
-app.listen(PORT, () => {
-	console.log(`HTTP server is running on ${PROTOCOL}://${HOST}:${PORT}`);
+app.listen(Number(PORT), () => {
+	console.log(`HTTP server running on ${PROTOCOL}://${HOST}:${PORT}`);
 });
 
 console.log(
-	`WebSocket server is running on ${
+	`WebSocket server running on ${
 		PROTOCOL === "http" ? "ws" : "wss"
 	}://${HOST}:${WSPORT}`
 );

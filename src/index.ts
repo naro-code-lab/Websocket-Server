@@ -84,6 +84,8 @@ wss.on("connection", (ws: WebSocket, req) => {
 				return;
 			}
 
+			console.log({ value });
+
 			const { appKey, channel, event } = value;
 
 			connectionInfo = { appKey, channel, event };

@@ -6,11 +6,16 @@ export interface Subscription {
 	lastActivity: number;
 }
 
+const subscriptions: Record<
+	string,
+	Record<string, Record<string, Subscription[]>>
+> = {};
+
 export class SubscriptionManager {
-	private subscriptions: Record<
-		string,
-		Record<string, Record<string, Subscription[]>>
-	> = {};
+	// private subscriptions: Record<
+	// 	string,
+	// 	Record<string, Record<string, Subscription[]>>
+	// > = {};
 	private readonly maxInactiveTime: number;
 	private cleanupInterval: NodeJS.Timeout;
 
@@ -31,16 +36,16 @@ export class SubscriptionManager {
 		channel: string,
 		ws: WebSocket
 	): void {
-		if (!this.subscriptions[appKey]) {
-			this.subscriptions[appKey] = {};
+		if (!subscriptions[appKey]) {
+			subscriptions[appKey] = {};
 		}
 
-		if (!this.subscriptions[appKey][event]) {
-			this.subscriptions[appKey][event] = {};
+		if (!subscriptions[appKey][event]) {
+			subscriptions[appKey][event] = {};
 		}
 
-		if (!this.subscriptions[appKey][event][channel]) {
-			this.subscriptions[appKey][event][channel] = [];
+		if (!subscriptions[appKey][event][channel]) {
+			subscriptions[appKey][event][channel] = [];
 		}
 
 		const subscription: Subscription = {
@@ -49,7 +54,7 @@ export class SubscriptionManager {
 			lastActivity: Date.now(),
 		};
 
-		this.subscriptions[appKey][event][channel].push(subscription);
+		subscriptions[appKey][event][channel].push(subscription);
 	}
 
 	public removeSubscription(
@@ -58,11 +63,11 @@ export class SubscriptionManager {
 		channel: string,
 		ws: WebSocket
 	): void {
-		if (!this.subscriptions[appKey]?.[event]?.[channel]) return;
+		if (!subscriptions[appKey]?.[event]?.[channel]) return;
 
-		this.subscriptions[appKey][event][channel] = this.subscriptions[appKey][
-			event
-		][channel].filter((sub) => sub.ws !== ws);
+		subscriptions[appKey][event][channel] = subscriptions[appKey][event][
+			channel
+		].filter((sub) => sub.ws !== ws);
 
 		this.cleanupEmptyPaths(appKey, event, channel);
 	}
@@ -72,9 +77,9 @@ export class SubscriptionManager {
 		event: string,
 		channel: string
 	): Subscription[] {
-		let sub = this.subscriptions[appKey]?.[event]?.[channel] || [];
+		let sub = subscriptions[appKey]?.[event]?.[channel] || [];
 
-		console.log(sub);
+		console.log(subscriptions);
 
 		return sub;
 	}
@@ -95,25 +100,21 @@ export class SubscriptionManager {
 	private cleanup(): void {
 		const now = Date.now();
 
-		Object.keys(this.subscriptions).forEach((appKey) => {
-			Object.keys(this.subscriptions[appKey]).forEach((event) => {
-				Object.keys(this.subscriptions[appKey][event]).forEach(
-					(channel) => {
-						this.subscriptions[appKey][event][channel] =
-							this.subscriptions[appKey][event][channel].filter(
-								(sub) => {
-									const isActive =
-										now - sub.lastActivity <
-										this.maxInactiveTime;
-									const isConnected =
-										sub.ws.readyState === WebSocket.OPEN;
-									return isActive && isConnected;
-								}
-							);
+		Object.keys(subscriptions).forEach((appKey) => {
+			Object.keys(subscriptions[appKey]).forEach((event) => {
+				Object.keys(subscriptions[appKey][event]).forEach((channel) => {
+					subscriptions[appKey][event][channel] = subscriptions[
+						appKey
+					][event][channel].filter((sub) => {
+						const isActive =
+							now - sub.lastActivity < this.maxInactiveTime;
+						const isConnected =
+							sub.ws.readyState === WebSocket.OPEN;
+						return isActive && isConnected;
+					});
 
-						this.cleanupEmptyPaths(appKey, event, channel);
-					}
-				);
+					this.cleanupEmptyPaths(appKey, event, channel);
+				});
 			});
 		});
 	}
@@ -123,18 +124,16 @@ export class SubscriptionManager {
 		event: string,
 		channel: string
 	): void {
-		if (this.subscriptions[appKey]?.[event]?.[channel]?.length === 0) {
-			delete this.subscriptions[appKey][event][channel];
+		if (subscriptions[appKey]?.[event]?.[channel]?.length === 0) {
+			delete subscriptions[appKey][event][channel];
 		}
 
-		if (
-			Object.keys(this.subscriptions[appKey]?.[event] || {}).length === 0
-		) {
-			delete this.subscriptions[appKey][event];
+		if (Object.keys(subscriptions[appKey]?.[event] || {}).length === 0) {
+			delete subscriptions[appKey][event];
 		}
 
-		if (Object.keys(this.subscriptions[appKey] || {}).length === 0) {
-			delete this.subscriptions[appKey];
+		if (Object.keys(subscriptions[appKey] || {}).length === 0) {
+			delete subscriptions[appKey];
 		}
 	}
 

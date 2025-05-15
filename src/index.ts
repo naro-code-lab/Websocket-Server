@@ -125,7 +125,6 @@ router.use((req, res, next) => {
 	const allowedIps = ALLOWED_BROADCASTING_SERVER_IPS.split(",");
 	if (
 		ALLOWED_BROADCASTING_SERVER_IPS === "*" ||
-		allowedIps.includes("*") ||
 		allowedIps.includes(clientIp || "")
 	) {
 		return next();
